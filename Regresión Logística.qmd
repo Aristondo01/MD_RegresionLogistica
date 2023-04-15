@@ -380,7 +380,7 @@ El tiempo total de este modelo fue de `r pm3$sampling.time` ms y su consumo tota
 
 
 ### 1.9 Determine cual de los 3 modelos fue mejor
-Podemos ver que los dos nuevos modelos en los cuales se utilizaron las variables con significancia, el AIC es muy bajo en comparacion al primer modelo. Pero estos modelos muestran indicioso de overfitting en las graficas de curvas de aprendizaje. Por lo que consideramos que primer modelo es el mejor modelo ya que tiene un Accuracy de 0.89 y no muestra indicios de overfitting.
+Podemos ver que los dos nuevos modelos en los cuales se utilizaron las variables con significancia, el AIC es muy bajo en comparacion al primer modelo. Pero estos modelos muestran indicioso de overfitting en las graficas de curvas de aprendizaje, esto nos lleva a que no vale la pena evaluar el desempeño del profiler pues el overffiting opaca las otras caracteristicas . Por lo que consideramos que primer modelo es el mejor modelo ya que tiene un Accuracy de 0.89 y no muestra indicios de overfitting.
 
 
 
