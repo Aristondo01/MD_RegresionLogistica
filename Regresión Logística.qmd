@@ -1,0 +1,387 @@
+---
+title: "MD_HDT6"
+
+---
+
+```{r}
+set.seed(123)
+datos <- read.csv("train.csv")
+```
+
+```{r echo=F, include=F, load_libraries}
+library(dplyr)
+library(hopkins)
+library(factoextra)
+library(ggrepel)
+library(cluster)
+library(flexclust)
+library(FeatureImpCluster)
+library(stringr)
+library(tidyr)
+library(stats)
+library(graphics)
+library(NbClust)
+library(mclust)
+library(GGally)
+library(corrplot)
+library(caret)
+library(ggplot2)
+library(kableExtra)
+library(e1071)
+library(rpart)
+library(rpart.plot)
+library(naivebayes)
+library(randomForest)
+library(dummy)
+library(profvis)
+library(mlr)
+```
+
+## 1. Dvisión de variables numéricas y obtención de data de prueba y entrenamiento
+
+### 1.1 División de variables
+```{r echo=FALSE}
+numeric_variables <- c("SalePrice", "LotFrontage", "LotArea", "OverallQual", "OverallCond", "MasVnrArea", "BsmtFinSF1", "BsmtFinSF2", "BsmtUnfSF", "TotalBsmtSF", "X1stFlrSF", "X2ndFlrSF", "LowQualFinSF", "GrLivArea", "BsmtFullBath", "BsmtHalfBath", "FullBath", "HalfBath", "BedroomAbvGr", "KitchenAbvGr", "TotRmsAbvGrd", "Fireplaces", "GarageCars", "GarageArea", "WoodDeckSF", "OpenPorchSF", "EnclosedPorch", "X3SsnPorch", "ScreenPorch", "PoolArea", "MiscVal")
+numericas <- datos[, numeric_variables]
+cualitativas <- datos[, !(names(datos) %in% numeric_variables)]
+cualitativas <- cualitativas[, !(names(cualitativas) %in% c("Id"))]
+cualitativas <- cualitativas %>%
+    mutate(MoSold = month.abb[MoSold])
+
+datos <- datos %>% mutate_at(colnames(cualitativas), function(x) as.factor(x))
+numericas <- datos[, numeric_variables]
+datos <- datos[complete.cases(numericas), ]
+numericas <- na.omit(numericas)
+numericas_norm <- mutate_if(numericas, is.numeric, scale)
+datos <- data.frame(numericas_norm, datos[, -match(numeric_variables, names(datos))])
+```
+
+### 1.2 Analisis de NA's
+
+```{r}
+faltantes_por_col <- colSums(is.na(datos))
+faltantes_por_col
+```
+
+Se puede observar que PoolQC tiene demasiados datos faltantes, al igual que Fence, Alley, MiscFeature y FireplaceQu. Por lo tanto estas columnas no se usaran.
+
+```{r}
+datos <- select(datos, -Id, -PoolQC, -Fence, -Alley, -MiscFeature, -FireplaceQu) 
+datos <- na.omit(datos)
+```
+
+### 1.2 Eliminación de variables no significativas
+
+```{r}
+datos <- select(datos, -GarageYrBlt, -SaleType, -SaleCondition, -MoSold, -YrSold, -YearBuilt, -Condition2, -MSSubClass, MSZoning, -LotShape)
+```
+
+Se observaron diferentes variables que no aportaban al modelo, por lo tanto se decidió eliminarlas.
+
+### 1.3 Creación de clasificación de la variable de precios
+
+```{r}
+p33 <- quantile(datos$SalePrice, 0.33)
+p66 <- quantile(datos$SalePrice, 0.66)
+datosT <- datos
+
+datosT <- datosT %>%
+    mutate(clasificacion = ifelse(datosT$SalePrice < p33, "Economicas",
+        ifelse(datosT$SalePrice < p66, "Intermedias",
+            "Caras"
+        )
+    ))
+datosT$clasificacion <- as.factor(datosT$clasificacion)
+```
+
+### 1.4 Creación de variables dicotómicas
+
+```{r}
+library(fastDummies)
+datos_con_dummy <- dummy_cols(datosT, select_columns = c("clasificacion"))
+datos_con_dummy <- select(datos_con_dummy, -clasificacion, -clasificacion_Economicas, -clasificacion_Intermedias) 
+datos_con_dummy$clasificacion_Caras <- datos_con_dummy$clasificacion_Caras
+datos_con_dummy<-datos_con_dummy %>% mutate_at(c("clasificacion_Caras"),as.factor)
+```
+
+### 1.5. Modelo con todas las variables
+
+```{r warnings=FALSE}
+porcentaje <- 0.7
+set.seed(123)
+
+numeric_variables2 <- c("LotFrontage", "LotArea", "OverallQual", "OverallCond", "MasVnrArea", "BsmtFinSF1", "BsmtFinSF2", "BsmtUnfSF", "TotalBsmtSF", "X1stFlrSF", "X2ndFlrSF", "LowQualFinSF", "GrLivArea", "BsmtFullBath", "BsmtHalfBath", "FullBath", "HalfBath", "BedroomAbvGr", "KitchenAbvGr", "TotRmsAbvGrd", "Fireplaces", "GarageCars", "GarageArea", "WoodDeckSF", "OpenPorchSF", "EnclosedPorch", "X3SsnPorch", "ScreenPorch", "PoolArea", "MiscVal", "clasificacion_Caras")
+datos_num <- select(datos_con_dummy, -SalePrice)
+datos_num <- select(datos_con_dummy, -Utilities)
+# datos_num <- datos_con_dummy[, numeric_variables2]
+
+corte <- sample(nrow(datos_num), nrow(datos_num) * porcentaje)
+train <- datos_num[corte, ]
+test <- datos_num[-corte, ]
+```
+
+```{r warning=FALSE, message=FALSE}
+
+cv <- trainControl(method="cv", number=10)
+modelo_todas_cv <- caret::train(clasificacion_Caras~., data=train,method="glm", family = binomial, trControl = cv)
+
+```
+
+```{r warnings=FALSE}
+model_summary <- summary(modelo_todas_cv)
+print(model_summary, signif.stars = TRUE, digits = 3)
+```
+
+El modelo indica la significancia de las variable con un *
+
+```{r warning=FALSE, message=FALSE}
+
+variables_significativas <- model_summary$coefficients[model_summary$coefficients[, 4] < 0.01, , drop = FALSE]
+columnas_significativas <- rownames(variables_significativas[order(abs(variables_significativas[, 1]), decreasing = TRUE), ])
+columnas_significativas
+
+```
+
+Como se puede observar al tener el modelo con todas las variables se obteiene que ninguna variable es significativa, por lo tanto se procede a realizar el modelo con las variables numericas y variables que se consideran significativas.
+
+### 1.5.1 Análisis de correlación y ajuste de modelo
+
+```{r warning=FALSE, message=FALSE}
+datos_cor <- datos_con_dummy[, numeric_variables]
+datos_cor <- select(datos_cor, -SalePrice)
+correlacion <- cor(datos_cor)
+corrplot(correlacion)
+```
+
+Existe correlación entre las siguientes variables:
+
+- LotFrontage: LotArea, TotalBsmtSF, X1stFlrSF
+- LotArea: LotFrontage, TotalBsmtSF, GrLivArea
+- OverallQual: TotalBsmtSF, X1stFlrSF, GrLivArea, FullBath, GarageCars, GarageArea
+- BsmtFinSF1: BsmtUnfSF, BsmtFullBath
+- BsmtUnfSF: BsmtFinSF1
+- TotalsmtSF: X1stFlrSF
+- X1stFlrSF: TotalBsmtSF
+- X2ndFlrSF: GrLivArea
+- GrLivArea: X2ndFlrSF, TotRmsAbvGrd
+- BsmtFullBath: BsmtFinSF1
+- BedRoomAvGr: TotRmsAbvGr
+- TotRmsAbvGrd: OverallQual, X2ndFlrSF, FullBath, BedroomAbvGr
+- FirePlaces: OverallQual, X1stFlrSF, GrLivArea
+- GarageCars: OverallQual, TotalBsmtSF, X1stFlrSF, GrLivArea, FullBath, TotRmsAbvGrd, GarageArea 
+- GarageArea: OverallQual, TotalBsmtSF, X1stFlrSF, GrLivArea, FullBath, TotRmsAbvGrd, GarageCars
+
+
+```{r prediccion_modelo_numericas, warning=FALSE, message=FALSE}
+test_1 = select(test, -clasificacion_Caras)
+pred <- predict(modelo_todas_cv,newdata = test_1)
+```
+
+```{r}
+caret::confusionMatrix(as.factor(pred),as.factor(test$clasificacion_Caras))
+```
+
+Parece ser que se tiene un buen modelo porque se tiene un accuracy de 0.87. La sensitividad y especificidad son buenas, de 0.89 y 0.83 respectivamente. Algo importante que se debe mencionar es que AIC es bastante alto, de 2717. Como se indicó, el modelo parece ajustarse bien a los datos, pero es necesario analizar el overfitting.
+
+
+```{r curva_de_aprendizaje}
+# train <- train[, numeric_variables2]
+datos.task = makeClassifTask(data = train, target = "clasificacion_Caras")
+rin2 = makeResampleDesc(method = "CV", iters = 10, predict = "both")
+lrn = makeLearner("classif.multinom", predict.type = "prob", trace = FALSE)
+lc2 = generateLearningCurveData(learners = lrn, task = datos.task,
+                                percs = seq(0.1, 1, by = 0.1),
+                                measures = list(ber, setAggregation(ber, train.mean)), resampling = rin2,
+                                show.info = FALSE)
+plotLearningCurve(lc2, facet = "learner")
+```
+
+Al tener el accuracy con un 86% y al observar las curvas de aprendizaje se puede concluir que el modelo tiene overfitting. La curva de balance de error en training siempre está en 0 y nunca converge con la curva de test. Con un accuracy tan alto y pocas variables significativas, se concluye lo mencionado.
+
+
+### 1.6 Modelo con variables numéricas
+
+```{r warning=FALSE, message=FALSE}
+porcentaje <- 0.7
+set.seed(123)
+
+numeric_variables2 <- c("LotFrontage", "LotArea", "OverallQual", "OverallCond", "MasVnrArea", "BsmtFinSF1", "BsmtFinSF2", "BsmtUnfSF", "TotalBsmtSF", "X1stFlrSF", "X2ndFlrSF", "LowQualFinSF", "GrLivArea", "BsmtFullBath", "BsmtHalfBath", "FullBath", "HalfBath", "BedroomAbvGr", "KitchenAbvGr", "TotRmsAbvGrd", "Fireplaces", "GarageCars", "GarageArea", "WoodDeckSF", "OpenPorchSF", "EnclosedPorch", "X3SsnPorch", "ScreenPorch", "PoolArea", "MiscVal", "clasificacion_Caras")
+# datos_num <- select(datos_con_dummy, -SalePrice)
+# datos_num <- select(datos_con_dummy, -Utilities)
+datos_num <- datos_con_dummy[, numeric_variables2]
+
+corte <- sample(nrow(datos_num), nrow(datos_num) * porcentaje)
+train <- datos_num[corte, ]
+test <- datos_num[-corte, ]
+```
+
+```{r}
+Rprof(memory.profiling = TRUE)
+cv <- trainControl(method="cv", number=10)
+modelo_todas_cv <- caret::train(clasificacion_Caras~., data=train,method="glm", family = binomial, trControl = cv)
+Rprof(NULL)
+pm1 <- summaryRprof(memory = "both")
+
+```
+
+```{r}
+model_summary <- summary(modelo_todas_cv)
+print(model_summary, signif.stars = TRUE, digits = 3)
+```
+
+Como se puede observar el modelo indica la significancia de las variable con un *, pero nosotros designamos las varibales que tienen un valor de significaia menor a 0.01, las cuales son:
+
+```{r}
+
+variables_significativas <- model_summary$coefficients[model_summary$coefficients[, 4] < 0.01, , drop = FALSE]
+columnas_significativas <- rownames(variables_significativas[order(abs(variables_significativas[, 1]), decreasing = TRUE), ])
+columnas_significativas
+
+```
+
+Como se puede hay varias variables que son significativas para el modelo, con lo que teniendo eliminadas las columnas que no aportan al modelo. Hay otras variables como TotalBsmtSF y GrLivArea que no aportan nada al modelo.
+
+####  1.6.1 Análisis de ajuste de modelo
+
+```{r}
+test_1 = select(test, -clasificacion_Caras)
+pred <- predict(modelo_todas_cv,newdata = test_1)
+```
+
+```{r}
+caret::confusionMatrix(as.factor(pred),as.factor(test$clasificacion_Caras))
+```
+
+Parece ser que se tiene un buen modelo porque se tiene un accuracy de 0.89. La sensitividad y especificidad son buenas, de 0.89 y 0.83 respectivamente. Algo importante que se debe mencionar es que AIC es bastante alto, de 2717. Como se indicó, el modelo parece ajustarse bien a los datos, pero es necesario analizar el overfitting.
+
+
+```{r}
+datos.task = makeClassifTask(data = train, target = "clasificacion_Caras")
+rin2 = makeResampleDesc(method = "CV", iters = 10, predict = "both")
+lrn = makeLearner("classif.multinom", predict.type = "prob", trace = FALSE)
+lc2 = generateLearningCurveData(learners = lrn, task = datos.task,
+                                percs = seq(0.1, 1, by = 0.1),
+                                measures = list(ber, setAggregation(ber, train.mean)), resampling = rin2,
+                                show.info = FALSE)
+plotLearningCurve(lc2, facet = "learner")
+```
+
+Al tener el accuracy con un 89% y al observar las curvas de aprendizaje se puede concluir que el modelo tiene NO tiene overfitting. La curva de balance de error en training y de test convergen en cierto punto y se quedan relativamente constantes. Esto es lo que indica que tanto test como train son similares, por lo que es probable que NO haya overfitting con las variables numéricas únicamente.
+
+### 1.7 Elaboración de modelos distintos
+
+#### 1.7.1 Primer Modelo cambiando las varaibles predictorias 
+
+Para este primer modelo se tomo en cuenta todas las variables que demostraban una significancia menores a 0.01. El valor del accuracy obtenido fue de 0.89, exactamente igual al mismo valor del modeloa anterior. 
+```{r}
+    porcentaje <- 0.7
+    set.seed(123)
+
+    numeric_variables3 <- c("OverallQual","BsmtFinSF1","BsmtUnfSF", "X2ndFlrSF","BsmtFullBath", "FullBath", "PoolArea", "MiscVal", "clasificacion_Caras")
+    datos_num <- datos_con_dummy[, numeric_variables3]
+
+    corte <- sample(nrow(datos_num), nrow(datos_num) * porcentaje)
+    train <- datos_num[corte, ]
+    test <- datos_num[-corte, ]
+    test_3 = select(test, -clasificacion_Caras)
+
+    Rprof(memory.profiling = TRUE)
+    cv <- trainControl(method="cv", number=10)
+    modelo_cammbio1 <- caret::train(clasificacion_Caras~., data=train,method="glm", family = binomial, trControl = cv)
+    Rprof(NULL)
+    pm2 <- summaryRprof(memory = "both")
+
+    model_summary <- summary(modelo_cammbio1)
+    print(model_summary, signif.stars = TRUE, digits = 3)
+```
+
+```{r}
+datos.task = makeClassifTask(data = train, target = "clasificacion_Caras")
+rin2 = makeResampleDesc(method = "CV", iters = 10, predict = "both")
+lrn = makeLearner("classif.multinom", predict.type = "prob", trace = FALSE)
+lc2 = generateLearningCurveData(learners = lrn, task = datos.task,
+                                percs = seq(0.1, 1, by = 0.1),
+                                measures = list(ber, setAggregation(ber, train.mean)), resampling = rin2,
+                                show.info = FALSE)
+plotLearningCurve(lc2, facet = "learner")
+```
+
+Podemos obsservar que las curvas de aprendizaje se mantienen relativamente constantes y casi convergiendo entre 32.5% hasta 80% de los datos. Pero mientas más se acerca a 100% de los datos, la curva de test se aleja de la curva de train. Esto indica que el modelo tiene overfitting. Esto nos que utilizar todas las variables que mostraron significancia no es una buena opción.
+
+
+#### 1.7.2 Segundo Modelo cambiando las varaibles predictorias 
+
+```{r}
+    porcentaje <- 0.7
+    set.seed(123)
+
+    numeric_variables4 <- c("OverallQual","BsmtUnfSF", "FullBath", "PoolArea", "clasificacion_Caras")
+    datos_num <- datos_con_dummy[, numeric_variables4]
+
+    corte <- sample(nrow(datos_num), nrow(datos_num) * porcentaje)
+    train <- datos_num[corte, ]
+    test <- datos_num[-corte, ]
+    test_4 = select(test, -clasificacion_Caras)
+
+    Rprof(memory.profiling = TRUE)
+    cv <- trainControl(method="cv", number=10)
+    modelo_cammbio2 <- caret::train(clasificacion_Caras~., data=train,method="glm", family = binomial, trControl = cv)
+    Rprof(NULL)
+    pm3 <- summaryRprof(memory = "both")
+    model_summary <- summary(modelo_cammbio2)
+    print(model_summary, signif.stars = TRUE, digits = 3)
+```
+
+```{r}
+datos.task = makeClassifTask(data = train, target = "clasificacion_Caras")
+rin2 = makeResampleDesc(method = "CV", iters = 10, predict = "both")
+lrn = makeLearner("classif.multinom", predict.type = "prob", trace = FALSE)
+lc2 = generateLearningCurveData(learners = lrn, task = datos.task,
+                                percs = seq(0.1, 1, by = 0.1),
+                                measures = list(ber, setAggregation(ber, train.mean)), resampling = rin2,
+                                show.info = FALSE)
+plotLearningCurve(lc2, facet = "learner")
+```
+
+Podemos obsservar que las curvas de aprendizaje de test tiene un caida dramatica tratando de acercarse a la curva de train. Luego las  curvas se intersectan en 74% y 92% de los datos. Esto indica que el modelo tiene overfitting. Estos nos indica que utilizar solo las varaibles con significancia menor a 0.01 no es una buena opción para este modelo.
+
+### 1.8 Análisis de la eficiencia de los modelos
+
+#### 1.8.1 Modelo 1
+
+```{r}
+    caret::confusionMatrix(as.factor(pred),as.factor(test$clasificacion_Caras))
+```
+
+
+En este primer modelo tuvo un accuracy de 0.89. Este modelo se confundio mas en los falsos positivos y se confundio menos en los falsos negativos. Es decir que este modelo tiene problemas clasificando casas que son caras y marcandolas como si no fueran caras.
+El tiempo total de este modelo fue de `r pm1$sampling.time` ms y su consumo total de memoria fue `r sum(pm1$by.total$mem.total)` MB
+
+#### 1.8.2 Modelo 2
+```{r}
+
+pred1 <- predict(modelo_cammbio1,newdata = test_3)
+caret::confusionMatrix(as.factor(pred1),as.factor(test$clasificacion_Caras))
+```
+
+
+En este segundo modelo tuvo un accuracy de 0.89 tambien. De igual manera que el modelo anterior, este modelo se confundio mas en los falsos negativos y se confundio menos en los falsos negativos. Es decir que este modelo tiene problemas clasificando casas que son caras y marcandolas como si no fueran caras.
+El tiempo total de este modelo fue de `r pm2$sampling.time` ms y su consumo total de memoria fue `r sum(pm2$by.total$mem.total)` MB
+
+#### 1.8.3 Modelo 3
+```{r}
+
+pred2 <- predict(modelo_cammbio2,newdata = test_4)
+caret::confusionMatrix(as.factor(pred2),as.factor(test$clasificacion_Caras))
+
+```
+En este primer modelo tuvo un accuracy de 0.84. Este modelo se confundio mas en los falsos negativos y se confundio menos en los falsos negativos. Es decir que este modelo tiene problemas clasificando casas que son caras y marcandolas como si no fueran caras.
+El tiempo total de este modelo fue de `r pm3$sampling.time` ms y su consumo total de memoria fue `r sum(pm3$by.total$mem.total)` MB
+
+
+### 1.9 Determine cual de los 3 modelos fue mejor
+
+
+
+
+
