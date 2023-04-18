@@ -1,0 +1,2 @@
+memory profiling: sample.interval=20000
+:3004730:6302104:246605688:369:"tapply" "<Anonymous>" "rpart" "eval" "eval" "eval_with_user_handlers" "withVisible" "withCallingHandlers" "handle" "timing_fn" "evaluate_call" "evaluate::evaluate" "evaluate" "in_dir" "in_input_dir" "eng_r" "block_exec" "call_block" "process_group.block" "process_group" "withCallingHandlers" "process_file" "knitr::knit" "rmarkdown::render" "execute" ".main" 
